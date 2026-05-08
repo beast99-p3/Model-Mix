@@ -39,7 +39,7 @@ const WAIT_LINES = [
   "Fusion pass: chair weaves the strongest pieces together",
 ];
 
-const WAIT_NODES = ["Aurora", "Quartz", "Nova", "Lyric"];
+const WAIT_NODES = ["Anthropic", "OpenAI", "Gemma", "DeepSeek"];
 
 function clampPct(v: number): number {
   if (!Number.isFinite(v)) return 0;
@@ -134,17 +134,20 @@ export function DebateMode() {
 
       {loading && (
         <div className="rounded-xl border border-white/10 bg-surface p-5 shadow-xl">
-          <div className="relative mx-auto mb-5 grid h-48 w-full max-w-xl place-items-center rounded-xl border border-white/10 bg-black/20">
+          <div className="relative mx-auto mb-5 grid h-56 w-full max-w-xl place-items-center overflow-hidden rounded-xl border border-white/10 bg-black/20">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(110,231,183,0.22),transparent_60%)]" />
-            <div className="absolute h-20 w-20 animate-pulse rounded-full border border-accent/40 bg-accent/10" />
+            <div className="absolute h-24 w-24 animate-ping rounded-full border border-accent/30 bg-accent/5" />
             <div className="absolute text-xs font-semibold tracking-wide text-accent">FUSION CORE</div>
+            <div className="absolute h-[2px] w-[75%] animate-pulse bg-gradient-to-r from-transparent via-accent/50 to-transparent" />
+            <div className="absolute h-[2px] w-[75%] -rotate-12 animate-pulse bg-gradient-to-r from-transparent via-cyan-300/40 to-transparent" />
+            <div className="absolute h-[2px] w-[75%] rotate-12 animate-pulse bg-gradient-to-r from-transparent via-emerald-300/40 to-transparent" />
             {WAIT_NODES.map((name, i) => (
               <div
                 key={name}
-                className="absolute grid h-14 w-14 place-items-center rounded-full border border-white/20 bg-[#111827]/90 text-[10px] font-semibold text-slate-200 shadow-[0_0_24px_rgba(110,231,183,0.22)]"
+                className="absolute grid h-16 w-16 place-items-center rounded-full border border-white/20 bg-[#111827]/90 px-1 text-center text-[10px] font-semibold text-slate-200 shadow-[0_0_24px_rgba(110,231,183,0.22)]"
                 style={{
-                  transform: `translate(${Math.cos((Math.PI * 2 * i) / WAIT_NODES.length) * 120}px, ${Math.sin((Math.PI * 2 * i) / WAIT_NODES.length) * 58}px)`,
-                  animation: `pulse 1.8s ease-in-out ${i * 0.2}s infinite`,
+                  transform: `translate(${Math.cos((Math.PI * 2 * i) / WAIT_NODES.length + lineIdx * 0.45) * 130}px, ${Math.sin((Math.PI * 2 * i) / WAIT_NODES.length + lineIdx * 0.45) * 68}px)`,
+                  transition: "transform 900ms ease",
                 }}
               >
                 {name}
@@ -195,6 +198,13 @@ export function DebateMode() {
                   </p>
                 </div>
               </div>
+              <p className="mt-2 text-xs text-slate-500">
+                Final confidence blends relevance, agreement, and how much of each model's content survives in
+                the final merged answer.
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Panel consensus measures average agreement between model responses before chair synthesis.
+              </p>
               <p className="mt-3 text-xs text-slate-500">
                 Chair model: {result.analytics.chair_provider} / {result.analytics.chair_model}
               </p>
@@ -203,9 +213,7 @@ export function DebateMode() {
                 {scores.map((s) => (
                   <div key={`${s.debater_id}-${s.model}`} className="rounded-lg border border-white/10 p-3">
                     <div className="mb-1 flex items-center justify-between gap-3">
-                      <p className="text-sm font-medium text-white">
-                        {s.display_name} - {s.model}
-                      </p>
+                      <p className="text-sm font-medium text-white">{s.display_name}</p>
                       <p className="text-sm text-accent">{clampPct(s.contribution_pct).toFixed(1)}%</p>
                     </div>
                     <div className="h-2 rounded-full bg-black/30">
