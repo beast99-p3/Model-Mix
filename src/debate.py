@@ -119,6 +119,13 @@ def _run_debater_round2(question: str, cfg: DebaterConfig, round1_blocks: str) -
 def _tokenize(text: str) -> set[str]:
     return {t for t in re.findall(r"[a-z0-9]+", text.lower()) if len(t) > 2}
 
+def _char_ngrams(text: str, n: int = 4) -> set[str]:
+    # Use character n-grams to make the metric more tolerant to synonyms/rewrites.
+    s = re.sub(r"\s+", " ", text.lower().strip())
+    if len(s) < n:
+        return set()
+    return {s[i : i + n] for i in range(len(s) - n + 1)}
+
 
 def _provider_label(provider: str) -> str:
     p = provider.lower().strip()
@@ -129,6 +136,18 @@ def _provider_label(provider: str) -> str:
     if p == "bedrock":
         return "Bedrock"
     return provider
+
+
+def _normalize_final_answer_format(text: str) -> str:
+    s = text.replace("\r\n", "\n").strip()
+    # Ensure section headings start on fresh lines and have breathing room.
+    s = re.sub(r"\n{0,2}(##\s+)", r"\n\n\1", s)
+    # Keep numbered/bulleted list spacing readable.
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    # Ensure bullet and numbered list markers are separated from prior paragraph.
+    s = re.sub(r"([^\n])\n([-*]\s+)", r"\1\n\n\2", s)
+    s = re.sub(r"([^\n])\n(\d+\.\s+)", r"\1\n\n\2", s)
+    return s.strip()
 
 
 def _pct(v: float) -> float:
@@ -142,19 +161,37 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     union = len(a | b)
     return inter / union if union else 0.0
 
+def _containment(a: set[str], b: set[str]) -> float:
+    """How much of `b` is covered by `a` (useful for question alignment)."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(b)
+
 
 def _compute_analytics(question: str, final_answer: str, r2: list[TurnEntry]) -> DebateAnalytics:
     q_tokens = _tokenize(question)
     final_tokens = _tokenize(final_answer)
+    q_chars = _char_ngrams(question)
+    final_chars = _char_ngrams(final_answer)
 
     raw_rows: list[tuple[TurnEntry, float, float, int]] = []
     for t in r2:
         ans_tokens = _tokenize(t.text)
-        q_align = _jaccard(ans_tokens, q_tokens)
-        f_overlap = _jaccard(ans_tokens, final_tokens)
+        ans_chars = _char_ngrams(t.text)
+
+        # Question alignment: token containment + character overlap.
+        q_token_cov = _containment(ans_tokens, q_tokens)  # coverage of question
+        q_char_sim = _jaccard(ans_chars, q_chars)  # tolerance to paraphrases
+        q_align = (0.6 * q_token_cov) + (0.4 * q_char_sim)
+
+        # Final overlap: how much of the final answer is reflected in the model response.
+        f_token_cov = _containment(ans_tokens, final_tokens)
+        f_char_sim = _jaccard(ans_chars, final_chars)
+        f_overlap = (0.6 * f_token_cov) + (0.4 * f_char_sim)
+
         length = len(t.text.strip())
-        # Blend overlap and relevance; tiny bonus for substantial responses (capped).
-        support = (f_overlap * 0.65) + (q_align * 0.3) + min(length / 1200.0, 1.0) * 0.05
+        # Blend overlap and relevance; small bonus for substantial responses (capped).
+        support = (f_overlap * 0.7) + (q_align * 0.25) + min(length / 1200.0, 1.0) * 0.05
         raw_rows.append((t, support, q_align, length))
 
     total_support = sum(x[1] for x in raw_rows)
@@ -177,11 +214,18 @@ def _compute_analytics(question: str, final_answer: str, r2: list[TurnEntry]) ->
             ),
         )
 
-    # Average pairwise agreement among round-2 responses.
+    # Average pairwise agreement among round-2 responses (token coverage + char similarity).
     pair_scores: list[float] = []
     for i in range(len(r2)):
         for j in range(i + 1, len(r2)):
-            pair_scores.append(_jaccard(_tokenize(r2[i].text), _tokenize(r2[j].text)))
+            a_tok = _tokenize(r2[i].text)
+            b_tok = _tokenize(r2[j].text)
+            a_chars = _char_ngrams(r2[i].text)
+            b_chars = _char_ngrams(r2[j].text)
+
+            tok_agree = 0.5 * (_containment(a_tok, b_tok) + _containment(b_tok, a_tok))
+            char_agree = _jaccard(a_chars, b_chars)
+            pair_scores.append((0.65 * tok_agree) + (0.35 * char_agree))
     consensus = (sum(pair_scores) / len(pair_scores)) if pair_scores else 0.0
 
     mean_align = (
@@ -192,9 +236,10 @@ def _compute_analytics(question: str, final_answer: str, r2: list[TurnEntry]) ->
     mean_overlap = (
         sum(d.final_overlap_pct for d in debaters) / (100.0 * len(debaters)) if debaters else 0.0
     )
-    raw_confidence = (consensus * 0.4) + (mean_align * 0.35) + (mean_overlap * 0.25)
-    # User-facing confidence should not look artificially "bad" when overlap is sparse.
-    final_confidence = min(0.97, 0.35 + (raw_confidence * 0.62))
+    raw_confidence = (consensus * 0.3) + (mean_align * 0.45) + (mean_overlap * 0.25)
+    # Calibrate for display: overlap-based metrics can be sparse for good answers due to paraphrases.
+    # So we map raw confidence into a higher baseline without hiding low-quality runs.
+    final_confidence = min(1.0, 0.25 + (raw_confidence * 0.9))
 
     return DebateAnalytics(
         final_confidence_pct=_pct(final_confidence),
@@ -234,6 +279,6 @@ def run_debate(question: str) -> DebateResult:
 
     chair = get_backend(CHAIR_PROVIDER, CHAIR_MODEL)
     final = chair.complete(CHAIR_SYSTEM, _chair_user(question, full_text))
-    final_clean = final.strip()
+    final_clean = _normalize_final_answer_format(final)
     analytics = _compute_analytics(question, final_clean, r2)
     return DebateResult(final_answer=final_clean, transcript=transcript, analytics=analytics)

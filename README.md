@@ -108,7 +108,9 @@ python main.py "Your question" --show-debate
 - **`consensus_pct`**: average pairwise agreement between model round-2 responses before chair synthesis.
 - **`debaters[].contribution_pct`**: normalized estimate of how much each model influenced the final answer.
 
-These are heuristic quality signals, useful for comparing runs/model mixes. They are not a factual guarantee.
+These are heuristic quality signals, useful for comparing runs/model mixes. They are **not** a factual guarantee of correctness.
+
+Implementation note: confidence uses a mix of token overlap and character n-gram similarity, plus a calibration step (baseline) so good fusion runs don't look artificially low due to paraphrasing.
 
 ---
 

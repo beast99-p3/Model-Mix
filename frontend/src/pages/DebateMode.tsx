@@ -39,8 +39,6 @@ const WAIT_LINES = [
   "Fusion pass: chair weaves the strongest pieces together",
 ];
 
-const WAIT_NODES = ["Anthropic", "OpenAI", "Gemma", "DeepSeek"];
-
 function clampPct(v: number): number {
   if (!Number.isFinite(v)) return 0;
   return Math.max(0, Math.min(100, v));
@@ -134,30 +132,51 @@ export function DebateMode() {
 
       {loading && (
         <div className="rounded-xl border border-white/10 bg-surface p-5 shadow-xl">
-          <div className="relative mx-auto mb-5 grid h-56 w-full max-w-xl place-items-center overflow-hidden rounded-xl border border-white/10 bg-black/20">
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(110,231,183,0.22),transparent_60%)]" />
-            <div className="absolute h-24 w-24 animate-ping rounded-full border border-accent/30 bg-accent/5" />
-            <div className="absolute text-xs font-semibold tracking-wide text-accent">FUSION CORE</div>
-            <div className="absolute h-[2px] w-[75%] animate-pulse bg-gradient-to-r from-transparent via-accent/50 to-transparent" />
-            <div className="absolute h-[2px] w-[75%] -rotate-12 animate-pulse bg-gradient-to-r from-transparent via-cyan-300/40 to-transparent" />
-            <div className="absolute h-[2px] w-[75%] rotate-12 animate-pulse bg-gradient-to-r from-transparent via-emerald-300/40 to-transparent" />
-            {WAIT_NODES.map((name, i) => (
-              <div
-                key={name}
-                className="absolute grid h-16 w-16 place-items-center rounded-full border border-white/20 bg-[#111827]/90 px-1 text-center text-[10px] font-semibold text-slate-200 shadow-[0_0_24px_rgba(110,231,183,0.22)]"
-                style={{
-                  transform: `translate(${Math.cos((Math.PI * 2 * i) / WAIT_NODES.length + lineIdx * 0.45) * 130}px, ${Math.sin((Math.PI * 2 * i) / WAIT_NODES.length + lineIdx * 0.45) * 68}px)`,
-                  transition: "transform 900ms ease",
-                }}
-              >
-                {name}
-              </div>
-            ))}
+          <div className="relative mx-auto mb-5 h-56 w-full max-w-xl overflow-hidden rounded-xl border border-white/10 bg-black/20">
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(110,231,183,0.18),transparent_60%)]" />
+            <div className="absolute inset-0 bg-[conic-gradient(from_90deg_at_center,rgba(110,231,183,0.35),rgba(56,189,248,0.18),rgba(110,231,183,0.35))] opacity-20 animate-[mmSpin_6s_linear_infinite]" />
+
+            <div className="absolute left-1/2 top-1/2 h-40 w-40 -translate-x-1/2 -translate-y-1/2">
+              <div className="absolute inset-0 animate-[mmSpin_4s_linear_infinite] rounded-full" style={{ background: "conic-gradient(from 0deg, rgba(110,231,183,0.0), rgba(110,231,183,0.7), rgba(56,189,248,0.35), rgba(110,231,183,0.0))" }} />
+              <div className="absolute inset-6 rounded-full bg-black/35 border border-white/10" />
+              <div className="absolute inset-0 rounded-full border border-white/10 opacity-50" style={{ boxShadow: "0 0 60px rgba(110,231,183,0.12)" }} />
+            </div>
+
+            <div className="absolute bottom-6 left-7 right-7 space-y-3">
+              {[0, 1, 2].map((idx) => (
+                <div key={idx} className="h-3 overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full w-[55%] rounded-full bg-gradient-to-r from-transparent via-accent/70 to-transparent"
+                    style={{
+                      transform: `translateX(${idx === 1 ? -10 : 0}%)`,
+                      animation: `mmEnergy_1.6s_ease-in-out_infinite`,
+                      animationDelay: `${idx * 160}ms`,
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="absolute left-6 top-5 text-[11px] font-semibold tracking-widest text-accent">
+              FUSION ENGINE
+            </div>
+
+            <style>{`
+              @keyframes mmSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+              @keyframes mmEnergy {
+                0% { transform: translateX(-120%); opacity: 0.25; }
+                35% { opacity: 0.9; }
+                100% { transform: translateX(260%); opacity: 0.15; }
+              }
+            `}</style>
           </div>
           <p className="text-center text-sm font-semibold text-white">Synthesizing best answer...</p>
           <p className="mt-1 text-center text-sm text-slate-400">{WAIT_LINES[lineIdx]}</p>
           <div className="mt-4 overflow-hidden rounded-full border border-white/10 bg-black/20">
-            <div className="h-2 w-full animate-pulse bg-accent/60" />
+            <div
+              className="h-2 bg-gradient-to-r from-cyan-300 via-accent to-emerald-300 transition-all duration-700"
+              style={{ width: `${Math.min(95, 30 + lineIdx * 22)}%` }}
+            />
           </div>
         </div>
       )}
@@ -174,7 +193,7 @@ export function DebateMode() {
             <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400">
               Final answer
             </h2>
-            <div className="prose prose-invert prose-sm max-w-none">
+            <div className="prose prose-invert prose-sm max-w-none leading-7 prose-headings:mb-2 prose-headings:mt-5 prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-1">
               <ReactMarkdown>{result.final_answer || ""}</ReactMarkdown>
             </div>
           </div>
@@ -199,8 +218,9 @@ export function DebateMode() {
                 </div>
               </div>
               <p className="mt-2 text-xs text-slate-500">
-                Final confidence blends relevance, agreement, and how much of each model's content survives in
-                the final merged answer.
+                Final confidence is a heuristic. It blends question alignment, panel consensus, and how much the
+                models agree with each other before the chair merges them. A calibration step keeps good fusion runs
+                from looking artificially low due to paraphrasing.
               </p>
               <p className="mt-1 text-xs text-slate-500">
                 Panel consensus measures average agreement between model responses before chair synthesis.
