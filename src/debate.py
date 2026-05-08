@@ -88,7 +88,16 @@ Output requirements:
 - Output only the final answer for the user (no meta commentary about panel/models/rounds).
 - The final answer should clearly reflect best contributions from multiple panelists when useful.
 - If uncertainty remains, state it briefly and provide the best default action.
-- Match requested depth."""
+- Match requested depth.
+- Use this output format exactly:
+  ## Final recommendation
+  <1 concise paragraph>
+  ## Why this is best
+  - <2-4 bullet points>
+  ## Action steps
+  1. <step>
+  2. <step>
+  3. <step>"""
 
 
 def _chair_user(question: str, transcript: str) -> str:
@@ -109,6 +118,17 @@ def _run_debater_round2(question: str, cfg: DebaterConfig, round1_blocks: str) -
 
 def _tokenize(text: str) -> set[str]:
     return {t for t in re.findall(r"[a-z0-9]+", text.lower()) if len(t) > 2}
+
+
+def _provider_label(provider: str) -> str:
+    p = provider.lower().strip()
+    if p == "openai":
+        return "OpenAI"
+    if p == "anthropic":
+        return "Anthropic"
+    if p == "bedrock":
+        return "Bedrock"
+    return provider
 
 
 def _pct(v: float) -> float:
@@ -145,7 +165,9 @@ def _compute_analytics(question: str, final_answer: str, r2: list[TurnEntry]) ->
         debaters.append(
             DebaterAnalytics(
                 debater_id=t.debater_id,
-                display_name=(cfg.display_name if cfg else t.debater_id),
+                display_name=(
+                    f"{_provider_label(cfg.provider)} - {cfg.model}" if cfg else t.debater_id
+                ),
                 provider=(cfg.provider if cfg else "unknown"),
                 model=(cfg.model if cfg else "unknown"),
                 contribution_pct=_pct(contrib),
