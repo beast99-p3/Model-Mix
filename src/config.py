@@ -22,36 +22,73 @@ class DebaterConfig:
     """One participant in the debate (legacy panel flow)."""
 
     id: str
+    display_name: str
     provider: str
     model: str
     persona: str
 
 
-def _debater(id: str, default_provider: str, default_model: str, persona: str) -> DebaterConfig:
-    """Allow mixing providers (openai / anthropic / bedrock) via env without code edits."""
-    p = os.getenv(f"DEBATER_{id.upper()}_PROVIDER", default_provider)
-    m = os.getenv(f"DEBATER_{id.upper()}_MODEL", default_model)
-    return DebaterConfig(id, p, m, persona)
+def _env_first(keys: list[str], fallback: str) -> str:
+    for k in keys:
+        v = os.getenv(k)
+        if v is not None and v.strip():
+            return v.strip()
+    return fallback
+
+
+def _debater(
+    *,
+    id: str,
+    display_name: str,
+    env_key: str,
+    default_provider: str,
+    default_model: str,
+    persona: str,
+    legacy_env_keys: tuple[str, ...] = (),
+) -> DebaterConfig:
+    """Allow mixing providers via env while keeping backward-compatible env keys."""
+    provider_keys = [f"DEBATER_{env_key}_PROVIDER", *[f"DEBATER_{k}_PROVIDER" for k in legacy_env_keys]]
+    model_keys = [f"DEBATER_{env_key}_MODEL", *[f"DEBATER_{k}_MODEL" for k in legacy_env_keys]]
+    p = _env_first(provider_keys, default_provider)
+    m = _env_first(model_keys, default_model)
+    return DebaterConfig(id=id, display_name=display_name, provider=p, model=m, persona=persona)
 
 
 DEBATERS: tuple[DebaterConfig, ...] = (
     _debater(
-        "analyst",
-        "openai",
-        "gpt-4o-mini",
-        "You are precise and evidence-oriented. Prefer clear structure and caveats.",
+        id="aurora",
+        display_name="Aurora Lens",
+        env_key="AURORA",
+        default_provider="bedrock",
+        default_model="deepseek.v3.2",
+        persona="You are precise and evidence-oriented. Prefer clear structure and caveats.",
+        legacy_env_keys=("ANALYST",),
     ),
     _debater(
-        "skeptic",
-        "openai",
-        "gpt-4o-mini",
-        "You challenge assumptions, find edge cases, and demand consistency.",
+        id="quartz",
+        display_name="Quartz Scout",
+        env_key="QUARTZ",
+        default_provider="bedrock",
+        default_model="google.gemma-3-12b-it",
+        persona="You challenge assumptions, find edge cases, and demand consistency.",
+        legacy_env_keys=("SKEPTIC",),
     ),
     _debater(
-        "pragmatist",
-        "openai",
-        "gpt-4o-mini",
-        "You optimize for what actually helps the user act or decide today.",
+        id="nova",
+        display_name="Nova Forge",
+        env_key="NOVA",
+        default_provider="bedrock",
+        default_model="openai.gpt-oss-safeguard-120b",
+        persona="You optimize for what actually helps the user act or decide today.",
+        legacy_env_keys=("PRAGMATIST",),
+    ),
+    _debater(
+        id="lyric",
+        display_name="Lyric Sage",
+        env_key="LYRIC",
+        default_provider="bedrock",
+        default_model="us.anthropic.claude-sonnet-4-6",
+        persona="You are a strategic editor: improve clarity, structure, and persuasive quality.",
     ),
 )
 

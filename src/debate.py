@@ -27,6 +27,7 @@ class DebateResult:
 @dataclass
 class DebaterAnalytics:
     debater_id: str
+    display_name: str
     provider: str
     model: str
     contribution_pct: float
@@ -45,7 +46,12 @@ class DebateAnalytics:
 
 
 ROUND1_SYSTEM = """You are one expert in a panel. Answer the user's question directly.
-Be concise but complete. This is round 1: give your best standalone answer."""
+Be concise but complete. This is round 1: give your best standalone answer.
+
+Quality bar:
+- Be accurate and specific.
+- State assumptions briefly if needed.
+- Prefer concrete recommendations over generic advice."""
 
 
 def _round1_user(question: str, cfg: DebaterConfig) -> str:
@@ -54,7 +60,11 @@ def _round1_user(question: str, cfg: DebaterConfig) -> str:
 
 ROUND2_SYSTEM = """You are still the same panelist. Below are round-1 answers from all panelists (including yours).
 Critique others where they are weak; concede where they are stronger. Then give an improved answer
-that could stand alone. Stay constructive."""
+that could stand alone. Stay constructive.
+
+Output format:
+1) "What I changed" (2-4 bullets)
+2) "Improved answer" (final standalone answer)"""
 
 
 def _round2_user(question: str, cfg: DebaterConfig, round1_blocks: str) -> str:
@@ -68,17 +78,17 @@ def _round2_user(question: str, cfg: DebaterConfig, round1_blocks: str) -> str:
 CHAIR_SYSTEM = """You chair a private expert panel. You see the user question and the full discussion.
 Your job is to reconcile conflicting views into ONE answer the user can use.
 
-Internal process (do not print these steps as a numbered list—use them to think, then write the answer):
-1) List where panelists agree; treat that as the backbone of the answer.
-2) Where they disagree, weigh: specificity to the question, internal consistency, and whether a claim is hedged vs overconfident.
-3) Prefer answers that acknowledge tradeoffs when experts split; pick a default recommendation when the user needs to act.
-4) If only one view is well-supported and others hand-wave, favor the well-supported view.
+Internal process (do not print these steps):
+1) Identify strongest claims from each panelist.
+2) Build the final answer by selecting the best parts across panelists (do not average weak and strong points).
+3) Resolve conflicts by choosing the most specific, consistent, and actionable claim.
+4) Keep only high-signal content; remove redundancy and fluff.
 
 Output requirements:
-- Output only the final answer for the user—no meta commentary about the panel, rounds, or models.
-- Merge the strongest points; when you resolve a disagreement, fold the reasoning into the answer naturally (not as "some said X, others Y").
-- If uncertainty remains, state it briefly and give the best default recommendation.
-- Match the user's requested depth (if they asked for a short answer, keep it short)."""
+- Output only the final answer for the user (no meta commentary about panel/models/rounds).
+- The final answer should clearly reflect best contributions from multiple panelists when useful.
+- If uncertainty remains, state it briefly and provide the best default action.
+- Match requested depth."""
 
 
 def _chair_user(question: str, transcript: str) -> str:
@@ -135,6 +145,7 @@ def _compute_analytics(question: str, final_answer: str, r2: list[TurnEntry]) ->
         debaters.append(
             DebaterAnalytics(
                 debater_id=t.debater_id,
+                display_name=(cfg.display_name if cfg else t.debater_id),
                 provider=(cfg.provider if cfg else "unknown"),
                 model=(cfg.model if cfg else "unknown"),
                 contribution_pct=_pct(contrib),
@@ -159,7 +170,9 @@ def _compute_analytics(question: str, final_answer: str, r2: list[TurnEntry]) ->
     mean_overlap = (
         sum(d.final_overlap_pct for d in debaters) / (100.0 * len(debaters)) if debaters else 0.0
     )
-    final_confidence = (consensus * 0.4) + (mean_align * 0.35) + (mean_overlap * 0.25)
+    raw_confidence = (consensus * 0.4) + (mean_align * 0.35) + (mean_overlap * 0.25)
+    # User-facing confidence should not look artificially "bad" when overlap is sparse.
+    final_confidence = min(0.97, 0.35 + (raw_confidence * 0.62))
 
     return DebateAnalytics(
         final_confidence_pct=_pct(final_confidence),

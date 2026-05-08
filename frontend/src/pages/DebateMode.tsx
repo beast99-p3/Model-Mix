@@ -10,6 +10,7 @@ type TranscriptEntry = {
 
 type DebaterScore = {
   debater_id: string;
+  display_name: string;
   provider: string;
   model: string;
   contribution_pct: number;
@@ -33,12 +34,12 @@ type DebateResponse = {
 };
 
 const WAIT_LINES = [
-  "Round 1: each model proposes its best answer",
-  "Round 2: models challenge each other and refine",
-  "Chair is reconciling disagreements into one response",
+  "Signal drafting: each intelligence sketches a strategy",
+  "Crossfire pass: contenders challenge and strengthen claims",
+  "Fusion pass: chair weaves the strongest pieces together",
 ];
 
-const MODEL_BADGES = ["🤖", "🧠", "⚡"];
+const WAIT_NODES = ["Aurora", "Quartz", "Nova", "Lyric"];
 
 function clampPct(v: number): number {
   if (!Number.isFinite(v)) return 0;
@@ -96,7 +97,7 @@ export function DebateMode() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-white">Debate mode</h1>
+        <h1 className="text-2xl font-bold text-white">Fusion mode</h1>
         <p className="mt-1 text-sm text-slate-400">
           Models debate privately, then a chair returns one answer with contribution scores.
         </p>
@@ -133,18 +134,24 @@ export function DebateMode() {
 
       {loading && (
         <div className="rounded-xl border border-white/10 bg-surface p-5 shadow-xl">
-          <div className="mb-4 flex items-center justify-center gap-3">
-            {MODEL_BADGES.map((emoji, i) => (
+          <div className="relative mx-auto mb-5 grid h-48 w-full max-w-xl place-items-center rounded-xl border border-white/10 bg-black/20">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(110,231,183,0.22),transparent_60%)]" />
+            <div className="absolute h-20 w-20 animate-pulse rounded-full border border-accent/40 bg-accent/10" />
+            <div className="absolute text-xs font-semibold tracking-wide text-accent">FUSION CORE</div>
+            {WAIT_NODES.map((name, i) => (
               <div
-                key={emoji}
-                className="grid h-12 w-12 animate-bounce place-items-center rounded-full border border-white/15 bg-black/20 text-xl"
-                style={{ animationDelay: `${i * 0.18}s` }}
+                key={name}
+                className="absolute grid h-14 w-14 place-items-center rounded-full border border-white/20 bg-[#111827]/90 text-[10px] font-semibold text-slate-200 shadow-[0_0_24px_rgba(110,231,183,0.22)]"
+                style={{
+                  transform: `translate(${Math.cos((Math.PI * 2 * i) / WAIT_NODES.length) * 120}px, ${Math.sin((Math.PI * 2 * i) / WAIT_NODES.length) * 58}px)`,
+                  animation: `pulse 1.8s ease-in-out ${i * 0.2}s infinite`,
+                }}
               >
-                {emoji}
+                {name}
               </div>
             ))}
           </div>
-          <p className="text-center text-sm font-semibold text-white">Models are debating...</p>
+          <p className="text-center text-sm font-semibold text-white">Synthesizing best answer...</p>
           <p className="mt-1 text-center text-sm text-slate-400">{WAIT_LINES[lineIdx]}</p>
           <div className="mt-4 overflow-hidden rounded-full border border-white/10 bg-black/20">
             <div className="h-2 w-full animate-pulse bg-accent/60" />
@@ -197,7 +204,7 @@ export function DebateMode() {
                   <div key={`${s.debater_id}-${s.model}`} className="rounded-lg border border-white/10 p-3">
                     <div className="mb-1 flex items-center justify-between gap-3">
                       <p className="text-sm font-medium text-white">
-                        {s.debater_id} - {s.model}
+                        {s.display_name} - {s.model}
                       </p>
                       <p className="text-sm text-accent">{clampPct(s.contribution_pct).toFixed(1)}%</p>
                     </div>
@@ -209,7 +216,7 @@ export function DebateMode() {
                     </div>
                     <p className="mt-2 text-xs text-slate-400">
                       Alignment: {clampPct(s.question_alignment_pct).toFixed(1)}% | Final overlap:{" "}
-                      {clampPct(s.final_overlap_pct).toFixed(1)}%
+                      {clampPct(s.final_overlap_pct).toFixed(1)}% | Provider: {s.provider}
                     </p>
                   </div>
                 ))}
@@ -226,7 +233,7 @@ export function DebateMode() {
                 {result.transcript.map((t, idx) => (
                   <div key={`${t.round_name}-${t.debater_id}-${idx}`} className="rounded-lg border border-white/10 p-3">
                     <p className="mb-1 text-xs font-mono text-accent">
-                      {t.round_name} / {t.debater_id}
+                      {t.round_name} / {scores.find((s) => s.debater_id === t.debater_id)?.display_name ?? t.debater_id}
                     </p>
                     <p className="whitespace-pre-wrap text-sm text-slate-300">{t.text}</p>
                   </div>

@@ -19,6 +19,7 @@ class TranscriptEntry(BaseModel):
 
 class DebaterScore(BaseModel):
     debater_id: str
+    display_name: str
     provider: str
     model: str
     contribution_pct: float

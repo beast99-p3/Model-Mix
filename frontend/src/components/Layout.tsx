@@ -21,16 +21,10 @@ export function Layout({ children }: { children: ReactNode }) {
           </Link>
           <nav className="flex gap-1 text-sm font-medium">
             <Link
-              to="/chat"
-              className={`rounded-md border-b-2 px-3 py-2 transition-colors ${tab("/chat")}`}
-            >
-              Chat
-            </Link>
-            <Link
               to="/debate"
               className={`rounded-md border-b-2 px-3 py-2 transition-colors ${tab("/debate")}`}
             >
-              Debate
+              Fusion
             </Link>
             <Link
               to="/resume"

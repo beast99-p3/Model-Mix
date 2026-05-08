@@ -39,6 +39,7 @@ async def debate_endpoint(body: DebateRequest) -> DebateResponse:
             debaters=[
                 DebaterScore(
                     debater_id=d.debater_id,
+                    display_name=d.display_name,
                     provider=d.provider,
                     model=d.model,
                     contribution_pct=d.contribution_pct,
