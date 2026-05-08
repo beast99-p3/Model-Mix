@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Model Mix — Panel → One Answer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg-gradient" aria-hidden="true"></div>
+    <main class="shell">
+      <header class="header">
+        <p class="eyebrow">Multi-model debate</p>
+        <h1>Model Mix</h1>
+        <p class="lede">
+          Several perspectives argue; you get <strong>one</strong> synthesized answer.
+        </p>
+      </header>
+
+      <section class="panel panel-input" id="panel-input">
+        <label class="label" for="question">Your question</label>
+        <textarea
+          id="question"
+          name="question"
+          rows="5"
+          placeholder="Ask anything you want a careful, reconciled answer to…"
+          autocomplete="off"
+        ></textarea>
+
+        <label class="check">
+          <input type="checkbox" id="showTranscript" />
+          <span>Show panel discussion (rounds 1–2) below the final answer</span>
+        </label>
+
+        <div class="actions">
+          <button type="button" class="btn primary" id="submitBtn">
+            <span class="btn-label">Run panel</span>
+            <span class="btn-spinner" aria-hidden="true"></span>
+          </button>
+        </div>
+        <p class="hint">First run can take 30–90s depending on models and length.</p>
+      </section>
+
+      <section class="panel panel-status hidden" id="panel-status" aria-live="polite">
+        <div class="status-inner">
+          <div class="pulse-ring"></div>
+          <p class="status-title" id="statusTitle">Panel is debating…</p>
+          <p class="status-sub" id="statusSub">Round 1: independent answers</p>
+        </div>
+      </section>
+
+      <section class="panel panel-result hidden" id="panel-result">
+        <div class="result-header">
+          <h2>Final answer</h2>
+          <button type="button" class="btn ghost" id="newQuestionBtn">New question</button>
+        </div>
+        <article class="answer-card" id="finalAnswer"></article>
+
+        <details class="transcript-wrap hidden" id="transcriptWrap">
+          <summary>Panel discussion</summary>
+          <div class="transcript" id="transcript"></div>
+        </details>
+      </section>
+
+      <p class="error hidden" id="errorMsg" role="alert"></p>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

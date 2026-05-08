@@ -1,0 +1,20 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ["DM Sans", "system-ui", "sans-serif"],
+        mono: ["JetBrains Mono", "ui-monospace", "monospace"],
+      },
+      colors: {
+        surface: {
+          DEFAULT: "#141820",
+          muted: "#0c0e12",
+        },
+        accent: "#6ee7b7",
+      },
+    },
+  },
+  plugins: [],
+};

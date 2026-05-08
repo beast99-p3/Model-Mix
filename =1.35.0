@@ -1,0 +1,27 @@
+Collecting boto3
+  Downloading boto3-1.43.3-py3-none-any.whl.metadata (6.5 kB)
+Collecting botocore<1.44.0,>=1.43.3 (from boto3)
+  Downloading botocore-1.43.3-py3-none-any.whl.metadata (5.5 kB)
+Collecting jmespath<2.0.0,>=0.7.1 (from boto3)
+  Using cached jmespath-1.1.0-py3-none-any.whl.metadata (7.6 kB)
+Collecting s3transfer<0.18.0,>=0.17.0 (from boto3)
+  Downloading s3transfer-0.17.0-py3-none-any.whl.metadata (1.7 kB)
+Collecting python-dateutil<3.0.0,>=2.1 (from botocore<1.44.0,>=1.43.3->boto3)
+  Using cached python_dateutil-2.9.0.post0-py2.py3-none-any.whl.metadata (8.4 kB)
+Requirement already satisfied: urllib3!=2.2.0,<3,>=1.25.4 in c:\users\priye\onedrive - the george washington university\documents\projects\model mix\.venv\lib\site-packages (from botocore<1.44.0,>=1.43.3->boto3) (2.6.3)
+Collecting six>=1.5 (from python-dateutil<3.0.0,>=2.1->botocore<1.44.0,>=1.43.3->boto3)
+  Using cached six-1.17.0-py2.py3-none-any.whl.metadata (1.7 kB)
+Downloading boto3-1.43.3-py3-none-any.whl (140 kB)
+   --------------------------------------- 140.5/140.5 kB 757.3 kB/s eta 0:00:00
+
+Downloading botocore-1.43.3-py3-none-any.whl (15.0 MB)
+   ---------------------------------------- 15.0/15.0 MB 31.2 MB/s eta 0:00:00
+
+Using cached jmespath-1.1.0-py3-none-any.whl (20 kB)
+Downloading s3transfer-0.17.0-py3-none-any.whl (86 kB)
+   ---------------------------------------- 86.8/86.8 kB 287.9 kB/s eta 0:00:00
+
+Using cached python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
+Using cached six-1.17.0-py2.py3-none-any.whl (11 kB)
+Installing collected packages: six, jmespath, python-dateutil, botocore, s3transfer, boto3
+Successfully installed boto3-1.43.3 botocore-1.43.3 jmespath-1.1.0 python-dateutil-2.9.0.post0 s3transfer-0.17.0 six-1.17.0
