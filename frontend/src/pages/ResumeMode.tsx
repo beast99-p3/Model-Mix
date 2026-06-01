@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ReactDiffViewer from "react-diff-viewer-continued";
+import { ResumeAnalyzeLoader } from "../components/ResumeAnalyzeLoader";
+import { ResumeGenerateLoader } from "../components/ResumeGenerateLoader";
 import { formatFastApiError } from "../lib/apiError";
 import { consumeSseStream } from "../lib/sse";
 
@@ -9,22 +11,48 @@ type Analyze = {
   gaps: string[];
   resume_excerpt: string;
   resume_text: string;
+  source_upload_id?: string | null;
 };
+
+const GENERATE_STAGES = [
+  "Four models drafting in parallel…",
+  "Crossfire: refining each draft…",
+  "Chair merging best version…",
+  "Checking keyword coverage…",
+  "Exporting Word document…",
+];
 
 export function ResumeMode() {
   const [jdText, setJdText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [prefs, setPrefs] = useState("");
   const [analyze, setAnalyze] = useState<Analyze | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [refining, setRefining] = useState(false);
+  const [savingDownloads, setSavingDownloads] = useState(false);
+  const [analyzePhase, setAnalyzePhase] = useState(0);
+  const [generatePhase, setGeneratePhase] = useState(0);
   const [log, setLog] = useState<string[]>([]);
   const [artifactId, setArtifactId] = useState<string | null>(null);
-  const [draftMd, setDraftMd] = useState<string | null>(null);
+  const [editableDraft, setEditableDraft] = useState("");
+  const [editCommand, setEditCommand] = useState("");
   const [score, setScore] = useState<number | null>(null);
-  const [refine, setRefine] = useState("");
+  const [showDiff, setShowDiff] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const pushLog = (line: string) => setLog((l) => [...l, line]);
+  const busy = analyzing || generating || refining || savingDownloads;
+
+  useEffect(() => {
+    if (!analyzing) return;
+    const t = window.setInterval(() => setAnalyzePhase((p) => p + 1), 1800);
+    return () => window.clearInterval(t);
+  }, [analyzing]);
+
+  const pushLog = (line: string) => {
+    setLog((l) => [...l, line]);
+    setGeneratePhase((p) => Math.min(GENERATE_STAGES.length - 1, p + 1));
+  };
 
   async function runAnalyze() {
     setError(null);
@@ -32,35 +60,35 @@ export function ResumeMode() {
       setError("Need a job description (20+ chars) and a resume file.");
       return;
     }
-    setBusy(true);
+    setAnalyzing(true);
+    setAnalyzePhase(0);
     setAnalyze(null);
     setArtifactId(null);
-    setDraftMd(null);
+    setEditableDraft("");
     setScore(null);
     setLog([]);
+    setShowDiff(false);
+
     const fd = new FormData();
     fd.append("jd_text", jdText);
     fd.append("file", file);
-    const res = await fetch("/api/resume/analyze", { method: "POST", body: fd });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) {
-      setError(formatFastApiError(data, res.statusText));
-      setBusy(false);
-      return;
+
+    try {
+      const res = await fetch("/api/resume/analyze", { method: "POST", body: fd });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(formatFastApiError(data, res.statusText));
+        return;
+      }
+      setAnalyze(data as Analyze);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAnalyzing(false);
     }
-    setAnalyze(data as Analyze);
-    setBusy(false);
   }
 
-  async function loadDraftForArtifact(id: string) {
-    const res = await fetch(`/api/resume/artifact/${id}/meta`);
-    if (!res.ok) return;
-    const m = (await res.json()) as { draft_markdown?: string };
-    if (m.draft_markdown) setDraftMd(m.draft_markdown);
-  }
-
-  /* Wrapped generate completion */
-  async function runGenerateFixed() {
+  async function runGenerate() {
     setError(null);
     if (!analyze) {
       setError("Run analyze first.");
@@ -70,16 +98,21 @@ export function ResumeMode() {
     const jd = jdText.trim();
     if (rt.length < 20 || jd.length < 20) {
       setError(
-        "Resume text and job description must each be at least 20 characters (API rule). Lengthen the JD or use a fuller resume extract.",
+        "Resume text and job description must each be at least 20 characters. Lengthen the JD or use a fuller resume.",
       );
       return;
     }
-    setBusy(true);
+
+    setGenerating(true);
+    setGeneratePhase(0);
     setLog([]);
     setArtifactId(null);
-    setDraftMd(null);
+    setEditableDraft("");
     setScore(null);
+    setShowDiff(false);
+
     let completedId: string | null = null;
+    let draftFromStream: string | null = null;
 
     const res = await fetch("/api/resume/generate", {
       method: "POST",
@@ -89,13 +122,14 @@ export function ResumeMode() {
         jd_text: jdText,
         preferences: prefs || null,
         keywords: analyze.jd_keywords,
+        source_upload_id: analyze.source_upload_id ?? null,
       }),
     });
 
     if (!res.ok) {
       const errBody = await res.json().catch(() => null);
       setError(formatFastApiError(errBody, res.statusText));
-      setBusy(false);
+      setGenerating(false);
       return;
     }
 
@@ -112,52 +146,104 @@ export function ResumeMode() {
         }
         if (ev.stage === "complete" && typeof ev.artifact_id === "string") {
           completedId = ev.artifact_id;
+          if (typeof ev.draft_markdown === "string") {
+            draftFromStream = ev.draft_markdown;
+          }
         }
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      setBusy(false);
+      setGenerating(false);
       return;
     }
 
     if (completedId) {
       setArtifactId(completedId);
-      await loadDraftForArtifact(completedId);
+      if (draftFromStream) {
+        setEditableDraft(draftFromStream);
+      } else {
+        const metaRes = await fetch(`/api/resume/artifact/${completedId}/meta`);
+        if (metaRes.ok) {
+          const m = (await metaRes.json()) as { draft_markdown?: string };
+          if (m.draft_markdown) setEditableDraft(m.draft_markdown);
+        }
+      }
     }
-    setBusy(false);
+    setGenerating(false);
   }
 
-  async function runRefine() {
+  async function saveDraftExports(): Promise<boolean> {
+    if (!artifactId || !editableDraft.trim()) return false;
+    const res = await fetch("/api/resume/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ artifact_id: artifactId, draft_markdown: editableDraft }),
+    });
+    return res.ok;
+  }
+
+  async function downloadResume(format: "docx" | "pdf") {
     setError(null);
-    if (!artifactId || refine.trim().length < 3) {
-      setError("Need an artifact and feedback (3+ chars).");
+    if (!artifactId) return;
+    setSavingDownloads(true);
+    const saved = await saveDraftExports();
+    setSavingDownloads(false);
+    if (!saved) {
+      setError("Could not save draft before download.");
       return;
     }
-    setBusy(true);
+    window.location.href = `/api/resume/download/${artifactId}?format=${format}`;
+  }
+
+  async function runEditCommand() {
+    setError(null);
+    if (!artifactId || editCommand.trim().length < 3) {
+      setError("Enter an edit command (3+ characters).");
+      return;
+    }
+    if (!editableDraft.trim()) {
+      setError("No draft to edit.");
+      return;
+    }
+
+    setRefining(true);
     const res = await fetch("/api/resume/refine", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         artifact_id: artifactId,
-        feedback: refine,
+        feedback: editCommand,
         jd_text: jdText,
+        resume_text: editableDraft,
       }),
     });
-    const data = await res.json().catch(() => null) as {
+
+    const data = (await res.json().catch(() => null)) as {
       detail?: unknown;
       artifact_id?: string;
+      draft_markdown?: string;
     };
+
     if (!res.ok) {
       setError(formatFastApiError(data, res.statusText));
-      setBusy(false);
+      setRefining(false);
       return;
     }
+
     if (data?.artifact_id) {
       setArtifactId(data.artifact_id);
-      await loadDraftForArtifact(data.artifact_id);
+      if (data.draft_markdown) {
+        setEditableDraft(data.draft_markdown);
+      } else {
+        const metaRes = await fetch(`/api/resume/artifact/${data.artifact_id}/meta`);
+        if (metaRes.ok) {
+          const m = (await metaRes.json()) as { draft_markdown?: string };
+          if (m.draft_markdown) setEditableDraft(m.draft_markdown);
+        }
+      }
     }
-    setRefine("");
-    setBusy(false);
+    setEditCommand("");
+    setRefining(false);
   }
 
   return (
@@ -165,8 +251,8 @@ export function ResumeMode() {
       <div>
         <h1 className="text-2xl font-bold text-white">Resume mode</h1>
         <p className="mt-1 text-sm text-slate-400">
-          Upload resume + paste JD → analyze gaps → generate a tailored .docx. Refine with natural
-          language feedback.
+          Upload resume + paste JD → analyze gaps → four models fuse one tailored copy (same format as
+          your source) → edit with natural-language commands.
         </p>
       </div>
 
@@ -180,6 +266,7 @@ export function ResumeMode() {
             value={jdText}
             onChange={(e) => setJdText(e.target.value)}
             placeholder="Paste the full job description…"
+            disabled={busy}
           />
         </div>
         <div className="space-y-3">
@@ -189,6 +276,7 @@ export function ResumeMode() {
           <input
             type="file"
             accept=".docx,.pdf,.txt"
+            disabled={busy}
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             className="block w-full text-sm text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-accent file:px-3 file:py-2 file:text-sm file:font-semibold file:text-emerald-950"
           />
@@ -199,7 +287,8 @@ export function ResumeMode() {
             className="h-24 w-full rounded-lg border border-white/10 bg-black/30 p-3 text-sm text-white focus:border-accent/50 focus:outline-none"
             value={prefs}
             onChange={(e) => setPrefs(e.target.value)}
-            placeholder="e.g. one page, emphasize leadership, keep education short…"
+            placeholder="e.g. emphasize leadership, keep one page — layout changes only if you ask here"
+            disabled={busy}
           />
           <button
             type="button"
@@ -207,10 +296,12 @@ export function ResumeMode() {
             onClick={() => void runAnalyze()}
             className="w-full rounded-lg bg-white/10 py-2 text-sm font-semibold text-white hover:bg-white/15 disabled:opacity-50"
           >
-            Analyze
+            {analyzing ? "Analyzing…" : "Analyze"}
           </button>
         </div>
       </section>
+
+      {analyzing && <ResumeAnalyzeLoader phase={analyzePhase} />}
 
       {error && (
         <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
@@ -218,7 +309,7 @@ export function ResumeMode() {
         </div>
       )}
 
-      {analyze && (
+      {analyze && !analyzing && (
         <section className="space-y-4 rounded-xl border border-white/10 bg-surface p-5 shadow-xl">
           <h2 className="text-lg font-semibold text-white">Analysis</h2>
           <div className="grid gap-4 lg:grid-cols-2">
@@ -251,15 +342,22 @@ export function ResumeMode() {
           <button
             type="button"
             disabled={busy}
-            onClick={() => void runGenerateFixed()}
+            onClick={() => void runGenerate()}
             className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-emerald-950 disabled:opacity-50"
           >
-            Generate tailored resume
+            {generating ? "Generating…" : "Generate tailored resume (fusion)"}
           </button>
         </section>
       )}
 
-      {log.length > 0 && (
+      {generating && (
+        <ResumeGenerateLoader
+          statusLine={log.at(-1) ?? GENERATE_STAGES[generatePhase]}
+          progress={12 + generatePhase * 16}
+        />
+      )}
+
+      {log.length > 0 && !generating && (
         <section className="rounded-xl border border-white/10 bg-black/30 p-4 font-mono text-xs text-slate-400">
           {log.map((l, i) => (
             <div key={i}>{l}</div>
@@ -268,48 +366,91 @@ export function ResumeMode() {
         </section>
       )}
 
-      {artifactId && (
-        <section className="space-y-4 rounded-xl border border-white/10 bg-surface p-5 shadow-xl">
-          <div className="flex flex-wrap items-center gap-3">
-            <a
-              className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-emerald-950"
-              href={`/api/resume/download/${artifactId}`}
-            >
-              Download .docx
-            </a>
-            <span className="text-xs text-slate-500">Artifact: {artifactId.slice(0, 8)}…</span>
+      {editableDraft && artifactId && (
+        <section className="space-y-4 rounded-xl border border-accent/20 bg-surface p-5 shadow-xl">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-white">Generated resume</h2>
+              <p className="mt-0.5 text-xs text-slate-400">
+                Same layout as your source. Edit text directly or type a command below.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowDiff((v) => !v)}
+                className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-white/5"
+              >
+                {showDiff ? "Hide comparison" : "Compare to original"}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void downloadResume("docx")}
+                className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-emerald-950 disabled:opacity-50"
+              >
+                Download .docx
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void downloadResume("pdf")}
+                className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent disabled:opacity-50"
+              >
+                Download .pdf
+              </button>
+            </div>
           </div>
 
-          {analyze && draftMd && (
+          <textarea
+            className="min-h-[420px] w-full resize-y rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-sm leading-relaxed text-slate-100 focus:border-accent/50 focus:outline-none"
+            value={editableDraft}
+            onChange={(e) => setEditableDraft(e.target.value)}
+            disabled={refining}
+            spellCheck={false}
+          />
+
+          <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+            <label htmlFor="edit-command" className="mb-2 block text-xs font-semibold uppercase text-slate-500">
+              Edit command
+            </label>
+            <textarea
+              id="edit-command"
+              className="h-20 w-full rounded-lg border border-white/10 bg-black/30 p-3 text-sm text-white focus:border-accent/50 focus:outline-none"
+              value={editCommand}
+              onChange={(e) => setEditCommand(e.target.value)}
+              disabled={refining}
+              placeholder='e.g. "Strengthen the second bullet under Experience" or "Add Python to skills if missing"'
+            />
+            <button
+              type="button"
+              disabled={refining || editCommand.trim().length < 3}
+              onClick={() => void runEditCommand()}
+              className="mt-2 rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/15 disabled:opacity-50"
+            >
+              {refining ? "Applying edit…" : "Apply edit command"}
+            </button>
+          </div>
+
+          {refining && (
+            <div className="flex items-center gap-2 text-sm text-slate-400">
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-accent" />
+              Updating resume while preserving format…
+            </div>
+          )}
+
+          {showDiff && analyze && (
             <div className="overflow-hidden rounded-lg border border-white/10">
               <ReactDiffViewer
                 oldValue={analyze.resume_text}
-                newValue={draftMd}
+                newValue={editableDraft}
                 splitView
-                leftTitle="Extracted original"
-                rightTitle="AI draft (markdown)"
+                leftTitle="Original (source format)"
+                rightTitle="Generated copy"
                 useDarkTheme
               />
             </div>
           )}
-
-          <div className="space-y-2">
-            <label className="text-xs font-semibold uppercase text-slate-500">Refine</label>
-            <textarea
-              className="h-24 w-full rounded-lg border border-white/10 bg-black/30 p-3 text-sm text-white focus:border-accent/50 focus:outline-none"
-              value={refine}
-              onChange={(e) => setRefine(e.target.value)}
-              placeholder="e.g. Strengthen bullet 3 under Experience; shorten summary…"
-            />
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void runRefine()}
-              className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/15 disabled:opacity-50"
-            >
-              Apply refinement
-            </button>
-          </div>
         </section>
       )}
     </div>

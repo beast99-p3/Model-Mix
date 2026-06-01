@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from src.clients import get_backend
 from src.config import CHAIR_MODEL, CHAIR_PROVIDER, DEBATERS, DebaterConfig
+from src.resume.format import sanitize_panel_turn
+
+StageCallback = Callable[[str, str], None]
 
 
 @dataclass
@@ -54,8 +58,8 @@ Quality bar:
 - Prefer concrete recommendations over generic advice."""
 
 
-def _round1_user(question: str, cfg: DebaterConfig) -> str:
-    return f"{cfg.persona}\n\nUser question:\n{question}"
+def _round1_user(task: str, cfg: DebaterConfig) -> str:
+    return f"{cfg.persona}\n\nUser task:\n{task}"
 
 
 ROUND2_SYSTEM = """You are still the same panelist. Below are round-1 answers from all panelists (including yours).
@@ -67,9 +71,9 @@ Output format:
 2) "Improved answer" (final standalone answer)"""
 
 
-def _round2_user(question: str, cfg: DebaterConfig, round1_blocks: str) -> str:
+def _round2_user(task: str, cfg: DebaterConfig, round1_blocks: str) -> str:
     return (
-        f"{cfg.persona}\n\nUser question:\n{question}\n\n"
+        f"{cfg.persona}\n\nUser task:\n{task}\n\n"
         f"--- Round 1 (all panelists) ---\n{round1_blocks}\n"
         f"--- End round 1 ---\n\nYour round-2 improved answer:"
     )
@@ -100,19 +104,84 @@ Output requirements:
   3. <step>"""
 
 
-def _chair_user(question: str, transcript: str) -> str:
-    return f"User question:\n{question}\n\nFull panel discussion:\n{transcript}"
+def _chair_user(task: str, transcript: str) -> str:
+    return f"User task:\n{task}\n\nFull panel discussion:\n{transcript}"
 
 
-def _run_debater_round1(question: str, cfg: DebaterConfig) -> TurnEntry:
+def _normalize_final_answer_format(text: str) -> str:
+    s = text.replace("\r\n", "\n").strip()
+    # Ensure section headings start on fresh lines and have breathing room.
+    s = re.sub(r"\n{0,2}(##\s+)", r"\n\n\1", s)
+    # Keep numbered/bulleted list spacing readable.
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    # Ensure bullet and numbered list markers are separated from prior paragraph.
+    s = re.sub(r"([^\n])\n([-*]\s+)", r"\1\n\n\2", s)
+    s = re.sub(r"([^\n])\n(\d+\.\s+)", r"\1\n\n\2", s)
+    return s.strip()
+
+
+def _normalize_resume_markdown(text: str) -> str:
+    s = text.replace("\r\n", "\n").strip()
+    s = re.sub(r"^```(?:markdown)?\s*", "", s)
+    s = re.sub(r"\s*```$", "", s)
+    return s.strip()
+
+
+@dataclass(frozen=True)
+class FusionPrompts:
+    round1_system: str
+    round2_system: str
+    chair_system: str
+    postprocess: Callable[[str], str] = _normalize_final_answer_format
+    sanitize_turn: Callable[[str], str] | None = None
+
+
+DEFAULT_FUSION_PROMPTS = FusionPrompts(
+    round1_system=ROUND1_SYSTEM,
+    round2_system=ROUND2_SYSTEM,
+    chair_system=CHAIR_SYSTEM,
+)
+
+RESUME_FUSION_PROMPTS = FusionPrompts(
+    round1_system="""You are one expert resume editor in a panel. Tailor the candidate's resume copy for the job.
+Preserve the SOURCE resume's exact structure: same section headings (verbatim), section order, bullet markers,
+table rows, blank lines, line breaks, and spacing. Improve wording and JD alignment only where truthful.
+Do not invent employers, degrees, titles, or dates. No AI-style headings. Write like a human resume.
+
+CRITICAL: Output ONLY the resume text. No commentary, planning, line counts, or meta notes.""",
+    round2_system="""You are still the same resume-editing panelist. Review round-1 drafts from all panelists.
+Improve weak bullets; adopt stronger phrasing from peers where accurate. Keep the source format unchanged.
+
+CRITICAL: Output ONLY the full improved resume text. Do NOT include "What I changed", reasoning, line counts,
+or any commentary — resume content only.""",
+    chair_system="""You chair a private panel of resume editors. Output ONE final resume for the candidate.
+
+Rules:
+- Output ONLY the final resume text — nothing else.
+- NEVER include reasoning, planning, line counts, "What I changed", or notes about the panel/task.
+- Preserve source section headings verbatim, section order, bullet characters, blank lines, and spacing.
+- Do not rename sections or add decorative/AI headings.
+- Do not fabricate employers, degrees, titles, or dates.
+- Weave JD keywords naturally where accurate.""",
+    postprocess=_normalize_resume_markdown,
+    sanitize_turn=sanitize_panel_turn,
+)
+
+
+def _run_debater_round1(task: str, cfg: DebaterConfig, prompts: FusionPrompts) -> TurnEntry:
     backend = get_backend(cfg.provider, cfg.model)
-    text = backend.complete(ROUND1_SYSTEM, _round1_user(question, cfg))
+    text = backend.complete(prompts.round1_system, _round1_user(task, cfg))
     return TurnEntry(cfg.id, "round1", text)
 
 
-def _run_debater_round2(question: str, cfg: DebaterConfig, round1_blocks: str) -> TurnEntry:
+def _run_debater_round2(
+    task: str,
+    cfg: DebaterConfig,
+    round1_blocks: str,
+    prompts: FusionPrompts,
+) -> TurnEntry:
     backend = get_backend(cfg.provider, cfg.model)
-    text = backend.complete(ROUND2_SYSTEM, _round2_user(question, cfg, round1_blocks))
+    text = backend.complete(prompts.round2_system, _round2_user(task, cfg, round1_blocks))
     return TurnEntry(cfg.id, "round2", text)
 
 
@@ -136,18 +205,6 @@ def _provider_label(provider: str) -> str:
     if p == "bedrock":
         return "Bedrock"
     return provider
-
-
-def _normalize_final_answer_format(text: str) -> str:
-    s = text.replace("\r\n", "\n").strip()
-    # Ensure section headings start on fresh lines and have breathing room.
-    s = re.sub(r"\n{0,2}(##\s+)", r"\n\n\1", s)
-    # Keep numbered/bulleted list spacing readable.
-    s = re.sub(r"\n{3,}", "\n\n", s)
-    # Ensure bullet and numbered list markers are separated from prior paragraph.
-    s = re.sub(r"([^\n])\n([-*]\s+)", r"\1\n\n\2", s)
-    s = re.sub(r"([^\n])\n(\d+\.\s+)", r"\1\n\n\2", s)
-    return s.strip()
 
 
 def _pct(v: float) -> float:
@@ -250,23 +307,33 @@ def _compute_analytics(question: str, final_answer: str, r2: list[TurnEntry]) ->
     )
 
 
-def run_debate(question: str) -> DebateResult:
+def run_fusion(
+    task: str,
+    prompts: FusionPrompts = DEFAULT_FUSION_PROMPTS,
+    on_stage: StageCallback | None = None,
+) -> DebateResult:
     transcript: list[TurnEntry] = []
 
+    if on_stage:
+        on_stage("fusion_round1", "Panel drafting initial responses…")
+
     with ThreadPoolExecutor(max_workers=len(DEBATERS)) as ex:
-        futs = {ex.submit(_run_debater_round1, question, c): c for c in DEBATERS}
+        futs = {ex.submit(_run_debater_round1, task, c, prompts): c for c in DEBATERS}
         r1: list[TurnEntry] = []
         for fut in as_completed(futs):
             r1.append(fut.result())
     r1.sort(key=lambda t: next(i for i, c in enumerate(DEBATERS) if c.id == t.debater_id))
     transcript.extend(r1)
 
-    round1_blocks = "\n\n".join(
-        f"[{t.debater_id}]\n{t.text}" for t in r1
-    )
+    round1_blocks = "\n\n".join(f"[{t.debater_id}]\n{t.text}" for t in r1)
+
+    if on_stage:
+        on_stage("fusion_round2", "Crossfire pass: models challenge and refine drafts…")
 
     with ThreadPoolExecutor(max_workers=len(DEBATERS)) as ex:
-        futs = {ex.submit(_run_debater_round2, question, c, round1_blocks): c for c in DEBATERS}
+        futs = {
+            ex.submit(_run_debater_round2, task, c, round1_blocks, prompts): c for c in DEBATERS
+        }
         r2: list[TurnEntry] = []
         for fut in as_completed(futs):
             r2.append(fut.result())
@@ -274,11 +341,22 @@ def run_debate(question: str) -> DebateResult:
     transcript.extend(r2)
 
     full_text = "\n\n".join(
-        f"### {t.round_name} / {t.debater_id}\n{t.text}" for t in transcript
+        f"### {t.round_name} / {t.debater_id}\n"
+        f"{prompts.sanitize_turn(t.text) if prompts.sanitize_turn else t.text}"
+        for t in transcript
     )
 
+    if on_stage:
+        on_stage("fusion_chair", "Chair synthesizing one final output…")
+
     chair = get_backend(CHAIR_PROVIDER, CHAIR_MODEL)
-    final = chair.complete(CHAIR_SYSTEM, _chair_user(question, full_text))
-    final_clean = _normalize_final_answer_format(final)
-    analytics = _compute_analytics(question, final_clean, r2)
+    final = chair.complete(prompts.chair_system, _chair_user(task, full_text))
+    final_clean = prompts.postprocess(final)
+    if prompts.sanitize_turn:
+        final_clean = prompts.sanitize_turn(final_clean)
+    analytics = _compute_analytics(task, final_clean, r2)
     return DebateResult(final_answer=final_clean, transcript=transcript, analytics=analytics)
+
+
+def run_debate(question: str) -> DebateResult:
+    return run_fusion(question, DEFAULT_FUSION_PROMPTS)

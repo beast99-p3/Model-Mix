@@ -2,7 +2,7 @@
 FastAPI application: Chat (SSE), Resume pipeline, optional Panel debate.
 
 Dev (API + hot reload):
-  python -m uvicorn server:app --reload --host 127.0.0.1 --port 8000
+  python -m uvicorn server:app --reload --reload-dir src --reload-include server.py --host 127.0.0.1 --port 8000
 
 Frontend (Vite):
   cd frontend && npm install && npm run dev

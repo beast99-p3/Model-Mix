@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import queue
 from dataclasses import asdict
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from src.api.sse import sse_data
@@ -11,8 +13,9 @@ from src.resume.artifacts import (
     artifact_paths,
     load_meta,
     new_artifact_id,
-    write_docx_from_markdown,
+    save_source_upload,
     write_meta,
+    write_resume_exports,
 )
 from src.resume.extract import extract_text_from_bytes, read_upload_bytes
 from src.resume.pipeline import (
@@ -27,6 +30,7 @@ from src.schemas.resume import (
     ResumeGenerateRequest,
     ResumeRefineRequest,
     ResumeRefineResponse,
+    ResumeSaveRequest,
 )
 
 router = APIRouter(prefix="/api/resume", tags=["resume"])
@@ -44,7 +48,10 @@ async def resume_analyze(
         raise HTTPException(status_code=400, detail=str(e)) from e
     if len(resume_text.strip()) < 20:
         raise HTTPException(status_code=400, detail="Could not extract enough text from the file.")
-    return await analyze_resume_jd(resume_text, jd_text)
+    upload_id = new_artifact_id()
+    save_source_upload(upload_id, file.filename or "resume.docx", raw)
+    result = await analyze_resume_jd(resume_text, jd_text)
+    return result.model_copy(update={"source_upload_id": upload_id})
 
 
 @router.post("/generate")
@@ -53,16 +60,30 @@ async def resume_generate(body: ResumeGenerateRequest) -> StreamingResponse:
     ctx_jd = body.jd_text
 
     async def event_gen():
-        yield sse_data({"stage": "prepare", "message": "Starting resume draft…"})
+        stage_q: queue.SimpleQueue[dict[str, str | float]] = queue.SimpleQueue()
+
+        def on_stage(stage: str, message: str) -> None:
+            stage_q.put({"stage": stage, "message": message})
+
+        yield sse_data({"stage": "prepare", "message": "Starting fusion resume draft…"})
         ctx = PipelineContext(
             resume_text=ctx_resume,
             jd_text=ctx_jd,
             preferences=body.preferences,
             keywords=body.keywords,
         )
-        yield sse_data({"stage": "draft", "message": "Drafting tailored resume (LLM)…"})
+        yield sse_data({"stage": "draft", "message": "Four models debating resume drafts…"})
+
+        draft_task = asyncio.create_task(draft_resume(ctx, on_stage=on_stage))
+        while not draft_task.done():
+            while not stage_q.empty():
+                yield sse_data(stage_q.get())
+            await asyncio.sleep(0.05)
+        while not stage_q.empty():
+            yield sse_data(stage_q.get())
+
         try:
-            md = await draft_resume(ctx)
+            md = await draft_task
         except Exception as e:
             yield sse_data({"stage": "error", "message": str(e)})
             return
@@ -70,9 +91,9 @@ async def resume_generate(body: ResumeGenerateRequest) -> StreamingResponse:
         score = keyword_coverage_score(md, body.keywords)
         yield sse_data({"stage": "ats_check", "score": round(score, 3)})
         aid = new_artifact_id()
-        yield sse_data({"stage": "export", "message": "Writing Word document…"})
+        yield sse_data({"stage": "export", "message": "Writing Word and PDF documents…"})
         try:
-            write_docx_from_markdown(aid, md)
+            write_resume_exports(aid, md, source_upload_id=body.source_upload_id)
             write_meta(
                 ArtifactMeta(
                     artifact_id=aid,
@@ -80,14 +101,23 @@ async def resume_generate(body: ResumeGenerateRequest) -> StreamingResponse:
                     jd_text=ctx_jd,
                     draft_markdown=md,
                     preferences=body.preferences,
+                    source_upload_id=body.source_upload_id,
                 )
             )
         except Exception as e:
             yield sse_data({"stage": "error", "message": str(e)})
             return
-        yield sse_data({"stage": "complete", "artifact_id": aid})
+        yield sse_data({"stage": "complete", "artifact_id": aid, "draft_markdown": md})
 
-    return StreamingResponse(event_gen(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/refine", response_model=ResumeRefineResponse)
@@ -100,12 +130,17 @@ async def resume_refine(body: ResumeRefineRequest) -> ResumeRefineResponse:
     jd = body.jd_text or meta.jd_text
     draft = body.resume_text or meta.draft_markdown
     try:
-        md = await refine_resume(draft_markdown=draft, jd_text=jd, feedback=body.feedback)
+        md = await refine_resume(
+            draft_markdown=draft,
+            jd_text=jd,
+            feedback=body.feedback,
+            original_resume_text=meta.resume_text,
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
 
     aid = new_artifact_id()
-    write_docx_from_markdown(aid, md)
+    write_resume_exports(aid, md, source_upload_id=meta.source_upload_id)
     write_meta(
         ArtifactMeta(
             artifact_id=aid,
@@ -113,14 +148,55 @@ async def resume_refine(body: ResumeRefineRequest) -> ResumeRefineResponse:
             jd_text=jd,
             draft_markdown=md,
             preferences=meta.preferences,
+            source_upload_id=meta.source_upload_id,
         )
     )
-    return ResumeRefineResponse(artifact_id=aid)
+    return ResumeRefineResponse(artifact_id=aid, draft_markdown=md)
+
+
+@router.post("/save")
+async def resume_save(body: ResumeSaveRequest) -> dict[str, str]:
+    try:
+        meta = load_meta(body.artifact_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail="Artifact not found") from e
+
+    write_resume_exports(body.artifact_id, body.draft_markdown, source_upload_id=meta.source_upload_id)
+    write_meta(
+        ArtifactMeta(
+            artifact_id=body.artifact_id,
+            resume_text=meta.resume_text,
+            jd_text=meta.jd_text,
+            draft_markdown=body.draft_markdown,
+            preferences=meta.preferences,
+            source_upload_id=meta.source_upload_id,
+        )
+    )
+    return {"status": "ok"}
 
 
 @router.get("/download/{artifact_id}")
-async def resume_download(artifact_id: str) -> FileResponse:
-    docx_path, meta_path = artifact_paths(artifact_id)
+async def resume_download(
+    artifact_id: str,
+    format: str = Query("docx", pattern="^(docx|pdf)$"),
+) -> FileResponse:
+    try:
+        meta = load_meta(artifact_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail="Artifact not found") from e
+
+    docx_path, pdf_path, _ = artifact_paths(artifact_id)
+    write_resume_exports(artifact_id, meta.draft_markdown, source_upload_id=meta.source_upload_id)
+
+    if format == "pdf":
+        if not pdf_path.is_file():
+            raise HTTPException(status_code=404, detail="PDF not found")
+        return FileResponse(
+            path=pdf_path,
+            filename=f"resume-{artifact_id[:8]}.pdf",
+            media_type="application/pdf",
+        )
+
     if not docx_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(

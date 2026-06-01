@@ -20,6 +20,10 @@ class ResumeAnalyzeResponse(BaseModel):
         default="",
         description="Full plain text extracted from the upload (for tailoring / diff in UI)",
     )
+    source_upload_id: str | None = Field(
+        default=None,
+        description="ID of stored source file for format-preserving export",
+    )
 
 
 class ResumeGenerateRequest(BaseModel):
@@ -30,6 +34,7 @@ class ResumeGenerateRequest(BaseModel):
         description="Optional user notes: tone, emphasis, one-page, etc.",
     )
     keywords: list[str] = Field(default_factory=list)
+    source_upload_id: str | None = Field(default=None)
 
 
 class ResumeGenerateComplete(BaseModel):
@@ -49,7 +54,13 @@ class ResumeRefineRequest(BaseModel):
 
 class ResumeRefineResponse(BaseModel):
     artifact_id: str
+    draft_markdown: str = ""
     message: str = "ok"
+
+
+class ResumeSaveRequest(BaseModel):
+    artifact_id: str = Field(..., min_length=8)
+    draft_markdown: str = Field(..., min_length=1)
 
 
 class JobStatusResponse(BaseModel):

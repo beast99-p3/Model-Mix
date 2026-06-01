@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { DebateFusionLoader } from "../components/DebateFusionLoader";
 import { formatFastApiError } from "../lib/apiError";
 
 type TranscriptEntry = {
@@ -130,56 +131,7 @@ export function DebateMode() {
         </button>
       </div>
 
-      {loading && (
-        <div className="rounded-xl border border-white/10 bg-surface p-5 shadow-xl">
-          <div className="relative mx-auto mb-5 h-56 w-full max-w-xl overflow-hidden rounded-xl border border-white/10 bg-black/20">
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(110,231,183,0.18),transparent_60%)]" />
-            <div className="absolute inset-0 bg-[conic-gradient(from_90deg_at_center,rgba(110,231,183,0.35),rgba(56,189,248,0.18),rgba(110,231,183,0.35))] opacity-20 animate-[mmSpin_6s_linear_infinite]" />
-
-            <div className="absolute left-1/2 top-1/2 h-40 w-40 -translate-x-1/2 -translate-y-1/2">
-              <div className="absolute inset-0 animate-[mmSpin_4s_linear_infinite] rounded-full" style={{ background: "conic-gradient(from 0deg, rgba(110,231,183,0.0), rgba(110,231,183,0.7), rgba(56,189,248,0.35), rgba(110,231,183,0.0))" }} />
-              <div className="absolute inset-6 rounded-full bg-black/35 border border-white/10" />
-              <div className="absolute inset-0 rounded-full border border-white/10 opacity-50" style={{ boxShadow: "0 0 60px rgba(110,231,183,0.12)" }} />
-            </div>
-
-            <div className="absolute bottom-6 left-7 right-7 space-y-3">
-              {[0, 1, 2].map((idx) => (
-                <div key={idx} className="h-3 overflow-hidden rounded-full bg-white/10">
-                  <div
-                    className="h-full w-[55%] rounded-full bg-gradient-to-r from-transparent via-accent/70 to-transparent"
-                    style={{
-                      transform: `translateX(${idx === 1 ? -10 : 0}%)`,
-                      animation: `mmEnergy_1.6s_ease-in-out_infinite`,
-                      animationDelay: `${idx * 160}ms`,
-                    }}
-                  />
-                </div>
-              ))}
-            </div>
-
-            <div className="absolute left-6 top-5 text-[11px] font-semibold tracking-widest text-accent">
-              FUSION ENGINE
-            </div>
-
-            <style>{`
-              @keyframes mmSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-              @keyframes mmEnergy {
-                0% { transform: translateX(-120%); opacity: 0.25; }
-                35% { opacity: 0.9; }
-                100% { transform: translateX(260%); opacity: 0.15; }
-              }
-            `}</style>
-          </div>
-          <p className="text-center text-sm font-semibold text-white">Synthesizing best answer...</p>
-          <p className="mt-1 text-center text-sm text-slate-400">{WAIT_LINES[lineIdx]}</p>
-          <div className="mt-4 overflow-hidden rounded-full border border-white/10 bg-black/20">
-            <div
-              className="h-2 bg-gradient-to-r from-cyan-300 via-accent to-emerald-300 transition-all duration-700"
-              style={{ width: `${Math.min(95, 30 + lineIdx * 22)}%` }}
-            />
-          </div>
-        </div>
-      )}
+      {loading && <DebateFusionLoader statusLine={WAIT_LINES[lineIdx]} phase={lineIdx} />}
 
       {error && (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">

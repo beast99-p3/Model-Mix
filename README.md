@@ -3,7 +3,7 @@
 Model Mix is a multi-model fusion app:
 
 - **Fusion mode** (`/debate`): multiple models debate in two rounds and a chair synthesizes one final answer.
-- **Resume mode** (`/resume`): upload + analyze + generate `.docx` flow.
+- **Resume mode** (`/resume`): upload + analyze + **fusion draft** (four debaters + chair) + generate `.docx` flow.
 - API-first backend via FastAPI.
 
 ---
@@ -29,13 +29,13 @@ python -m venv .venv
 # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env   # add keys
-python -m uvicorn server:app --reload --host 127.0.0.1 --port 8000
+python -m uvicorn server:app --reload --reload-dir src --reload-include server.py --host 127.0.0.1 --port 8000
 ```
 
 Do **not** run the bare `uvicorn` command in Git Bash (it is often missing from `PATH` even after `pip install uvicorn`). Use **`python -m uvicorn`** instead, or from the project root run **`./run_server.sh`** (Git Bash) or **`run_server.bat`** (Command Prompt).
 
 **Git Bash + paths with spaces:** quote any full Windows path, e.g.  
-`"/c/Users/you/OneDrive - Your School/Projects/Model Mix/.venv/Scripts/python.exe" -m uvicorn server:app --reload --host 127.0.0.1 --port 8000`
+`"/c/Users/you/OneDrive - Your School/Projects/Model Mix/.venv/Scripts/python.exe" -m uvicorn server:app --reload --reload-dir src --reload-include server.py --host 127.0.0.1 --port 8000`
 
 **Frontend (development)**
 
@@ -81,7 +81,7 @@ See `.env.example`. Important variables:
 |--------|------|--------|
 | `GET` | `/api/health` | Liveness |
 | `POST` | `/api/resume/analyze` | `multipart/form-data`: `jd_text`, `file` (.docx / .pdf / .txt). JSON analysis + full `resume_text`. |
-| `POST` | `/api/resume/generate` | JSON: `resume_text`, `jd_text`, `preferences?`, `keywords`. SSE: `prepare`, `draft`, `ats_check`, `complete`. |
+| `POST` | `/api/resume/generate` | JSON: `resume_text`, `jd_text`, `preferences?`, `keywords`. SSE: `prepare`, `draft`, `fusion_round1`, `fusion_round2`, `fusion_chair`, `ats_check`, `complete`. Uses the same four-model fusion panel as `/api/debate`. |
 | `POST` | `/api/resume/refine` | JSON: `artifact_id`, `feedback`, `jd_text?`. New `artifact_id`. |
 | `GET` | `/api/resume/download/{artifact_id}` | `.docx` download |
 | `GET` | `/api/resume/artifact/{artifact_id}/meta` | Draft + source metadata (for diff UI) |

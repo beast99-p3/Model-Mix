@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass
@@ -8,13 +9,13 @@ from typing import Any
 from src.config import (
     RESUME_ANALYZE_MODEL,
     RESUME_ANALYZE_PROVIDER,
-    RESUME_DRAFT_MODEL,
-    RESUME_DRAFT_PROVIDER,
     RESUME_REFINE_MODEL,
     RESUME_REFINE_PROVIDER,
 )
+from src.debate import RESUME_FUSION_PROMPTS, StageCallback, run_fusion
 from src.llm.unified import llm_complete_logged
 from src.logging_conf import log_event
+from src.resume.format import finalize_resume_output, line_count
 from src.schemas.resume import KeywordHit, ResumeAnalyzeResponse
 
 
@@ -74,35 +75,51 @@ async def analyze_resume_jd(resume_text: str, jd_text: str) -> ResumeAnalyzeResp
     )
 
 
-DRAFT_SYSTEM = """You rewrite the candidate's resume to fit the job description.
-Output markdown with clear sections (e.g. Summary, Experience, Skills, Education).
-Use strong alignment to the JD keywords where truthful; do not invent employers, degrees, or dates.
-Keep content concise and scannable. If preferences are given, honor them."""
 
-
-async def draft_resume(ctx: PipelineContext) -> str:
+def _build_resume_fusion_task(ctx: PipelineContext) -> str:
     kw = ", ".join(ctx.keywords or [])
-    pref = ctx.preferences or ""
-    user = (
-        f"Preferences:\n{pref}\n\n"
-        f"Target keywords (use where accurate):\n{kw}\n\n"
+    pref = ctx.preferences or "(none)"
+    lines = line_count(ctx.resume_text)
+    return (
+        "Tailor this resume for the job description below.\n"
+        "FORMAT RULES (mandatory unless preferences say otherwise):\n"
+        "- Keep the same line-for-line structure as the source (same blank lines, bullets, indentation, tables).\n"
+        "- Edit wording only; do not restructure or rename sections.\n"
+        "- Preserve table rows (cells separated by |).\n"
+        "- No AI-style headings like 'Selected Projects', 'Core Competencies', or 'Section Keywords'.\n"
+        "- Sound human and professional, not templated.\n"
+        "- Return ONLY the resume text — no commentary, planning, or line-count notes.\n\n"
+        f"Preferences: {pref}\n"
+        f"Target keywords (use naturally where accurate): {kw}\n\n"
         f"JOB DESCRIPTION:\n{ctx.jd_text[:12000]}\n\n"
-        f"CURRENT RESUME:\n{ctx.resume_text[:12000]}\n\n"
-        "Produce the rewritten resume in markdown."
-    )
-    return await llm_complete_logged(
-        stage="resume_draft",
-        provider=RESUME_DRAFT_PROVIDER,
-        model=RESUME_DRAFT_MODEL,
-        system=DRAFT_SYSTEM,
-        user=user,
-        temperature=0.35,
+        f"SOURCE RESUME ({lines} lines — mirror structure exactly):\n{ctx.resume_text[:12000]}"
     )
 
 
-REFINE_SYSTEM = """You edit an existing resume draft based on user feedback.
-Return markdown only. Preserve factual content unless the user asks to rephrase.
-Do not add fabricated employers, titles, or dates."""
+async def draft_resume(ctx: PipelineContext, on_stage: StageCallback | None = None) -> str:
+    task = _build_resume_fusion_task(ctx)
+    result = await asyncio.to_thread(
+        run_fusion,
+        task,
+        RESUME_FUSION_PROMPTS,
+        on_stage,
+    )
+    log_event(
+        "resume_fusion_complete",
+        confidence=result.analytics.final_confidence_pct if result.analytics else None,
+        consensus=result.analytics.consensus_pct if result.analytics else None,
+    )
+    return finalize_resume_output(ctx.resume_text, result.final_answer)
+
+
+REFINE_SYSTEM = """You edit a resume copy based on user feedback only.
+Return ONLY the full revised resume text — no commentary, planning, or line-count notes.
+Preserve factual content unless the user asks to rephrase. Do not add fabricated employers, titles, or dates.
+
+Format rules (mandatory unless the user explicitly asks to change layout):
+- Match the ORIGINAL RESUME FORMAT reference line-for-line (same blank lines, bullets, spacing).
+- Do not add AI-style headings or rename sections.
+- Preserve table rows (cells separated by |)."""
 
 
 async def refine_resume(
@@ -110,14 +127,17 @@ async def refine_resume(
     draft_markdown: str,
     jd_text: str,
     feedback: str,
+    original_resume_text: str | None = None,
 ) -> str:
+    original = (original_resume_text or draft_markdown).strip()
     user = (
+        f"ORIGINAL RESUME FORMAT REFERENCE (preserve this structure):\n{original[:12000]}\n\n"
         f"JOB DESCRIPTION (context):\n{jd_text[:8000]}\n\n"
-        f"CURRENT DRAFT:\n{draft_markdown[:12000]}\n\n"
-        f"USER FEEDBACK:\n{feedback}\n\n"
-        "Return the full revised resume in markdown."
+        f"CURRENT DRAFT TO EDIT:\n{draft_markdown[:12000]}\n\n"
+        f"USER EDIT COMMAND:\n{feedback}\n\n"
+        "Return the full revised resume text with format preserved."
     )
-    return await llm_complete_logged(
+    raw = await llm_complete_logged(
         stage="resume_refine",
         provider=RESUME_REFINE_PROVIDER,
         model=RESUME_REFINE_MODEL,
@@ -125,6 +145,7 @@ async def refine_resume(
         user=user,
         temperature=0.25,
     )
+    return finalize_resume_output(original, raw)
 
 
 def keyword_coverage_score(resume_text: str, keywords: list[str]) -> float:
