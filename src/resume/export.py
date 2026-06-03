@@ -1,19 +1,19 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from src.resume.format import (
+    SKILL_CATEGORY_RE,
     bullet_parts,
     is_blank_line,
     is_contact_line,
     is_section_heading,
     line_role,
     normalize_text_chars,
+    prepare_layout_text,
+    strip_bullet_prefix,
     split_lines,
 )
-
-SKILL_CATEGORY_RE = re.compile(r"^([^:]{3,40}:)\s*(.+)$")
 
 
 def _add_bottom_border(paragraph) -> None:
@@ -85,8 +85,8 @@ def write_docx_from_source_template(
     from docx.table import Table
     from docx.text.paragraph import Paragraph
 
-    draft_lines = split_lines(normalize_text_chars(draft_text))
-    source_lines = split_lines(normalize_text_chars(source_text))
+    draft_lines = split_lines(prepare_layout_text(draft_text))
+    source_lines = split_lines(prepare_layout_text(source_text))
     line_idx = 0
 
     def next_line() -> str | None:
@@ -107,13 +107,12 @@ def write_docx_from_source_template(
             new_line = next_line()
             if new_line is None:
                 break
+            src_line = source_lines[line_idx - 1] if line_idx - 1 < len(source_lines) else ""
             _, content = bullet_parts(new_line)
             _replace_paragraph_text(
                 para,
                 content if bullet_parts(new_line)[0].strip() else new_line.strip(),
-                bold_prefix=bool(bullet_parts(source_lines[min(line_idx - 1, len(source_lines) - 1)])[0].strip())
-                if line_idx > 0
-                else False,
+                bold_prefix=bool(bullet_parts(src_line)[0].strip()),
             )
         elif tag == "tbl":
             table = Table(child, doc)
@@ -140,8 +139,10 @@ def write_docx_from_text(docx_path: Path, draft_text: str, source_text: str) -> 
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Inches, Pt
 
-    draft_lines = split_lines(normalize_text_chars(draft_text))
-    source_lines = split_lines(normalize_text_chars(source_text))
+    source_text = prepare_layout_text(source_text)
+    draft_text = prepare_layout_text(draft_text)
+    draft_lines = split_lines(draft_text)
+    source_lines = split_lines(source_text)
     if len(source_lines) != len(draft_lines):
         n = max(len(source_lines), len(draft_lines))
         source_lines += [""] * (n - len(source_lines))
@@ -179,6 +180,13 @@ def write_docx_from_text(docx_path: Path, draft_text: str, source_text: str) -> 
             p.paragraph_format.space_after = Pt(2)
             continue
 
+        if role == "skill_banner":
+            p = doc.add_paragraph()
+            p.paragraph_format.space_after = Pt(2)
+            run = p.add_run(text.strip())
+            _set_run_font(run, size_pt=10.5, bold=True, underline=True)
+            continue
+
         prefix, content = bullet_parts(out)
         if role == "bullet" and content:
             p = doc.add_paragraph(style="List Bullet")
@@ -189,9 +197,10 @@ def write_docx_from_text(docx_path: Path, draft_text: str, source_text: str) -> 
 
         if role == "continuation":
             p = doc.add_paragraph()
-            p.paragraph_format.left_indent = _indent_from_source(src)
+            p.paragraph_format.left_indent = Inches(0.35)
             p.paragraph_format.space_after = Pt(0)
-            run = p.add_run(text.strip())
+            display = strip_bullet_prefix(text) if bullet_parts(text)[0].strip() else text.strip()
+            run = p.add_run(display)
             _set_run_font(run, size_pt=10.5)
             continue
 
@@ -211,8 +220,10 @@ def write_pdf_from_text(pdf_path: Path, draft_text: str, source_text: str) -> Pa
     from reportlab.lib.units import inch
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
-    draft_lines = split_lines(normalize_text_chars(draft_text))
-    source_lines = split_lines(normalize_text_chars(source_text))
+    source_text = prepare_layout_text(source_text)
+    draft_text = prepare_layout_text(draft_text)
+    draft_lines = split_lines(draft_text)
+    source_lines = split_lines(source_text)
     if len(source_lines) != len(draft_lines):
         n = max(len(source_lines), len(draft_lines))
         source_lines += [""] * (n - len(source_lines))
@@ -231,8 +242,14 @@ def write_pdf_from_text(pdf_path: Path, draft_text: str, source_text: str) -> Pa
     contact_style = ParagraphStyle("Contact", parent=styles["Normal"], fontName="Times-Roman", fontSize=10, alignment=TA_CENTER, spaceAfter=6)
     heading_style = ParagraphStyle("Heading", parent=styles["Normal"], fontName="Times-Bold", fontSize=11, alignment=TA_LEFT, spaceBefore=6, spaceAfter=2)
     body_style = ParagraphStyle("Body", parent=styles["Normal"], fontName="Times-Roman", fontSize=10.5, leading=12, alignment=TA_LEFT, spaceAfter=1)
-    cont_style = ParagraphStyle("Cont", parent=body_style, leftIndent=24, spaceAfter=0)
+    cont_style = ParagraphStyle("Cont", parent=body_style, leftIndent=28, spaceAfter=0)
     bullet_style = ParagraphStyle("Bullet", parent=body_style, leftIndent=18, bulletIndent=0, spaceAfter=1)
+    banner_style = ParagraphStyle(
+        "SkillBanner",
+        parent=body_style,
+        fontName="Times-Bold",
+        spaceAfter=2,
+    )
 
     def esc(s: str) -> str:
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -256,11 +273,14 @@ def write_pdf_from_text(pdf_path: Path, draft_text: str, source_text: str) -> Pa
             story.append(Paragraph(esc(text), contact_style))
         elif role == "heading":
             story.append(Paragraph(f"<u><b>{esc(text)}</b></u>", heading_style))
+        elif role == "skill_banner":
+            story.append(Paragraph(f"<u><b>{esc(text)}</b></u>", banner_style))
         elif role == "bullet":
             _, content = bullet_parts(out)
             story.append(Paragraph(f"&bull; {skill_markup(content or text)}", bullet_style))
         elif role == "continuation":
-            story.append(Paragraph(esc(text), cont_style))
+            display = strip_bullet_prefix(text) if bullet_parts(text)[0].strip() else text
+            story.append(Paragraph(esc(display), cont_style))
         else:
             story.append(Paragraph(esc(text), body_style))
 

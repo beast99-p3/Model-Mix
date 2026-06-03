@@ -16,7 +16,8 @@ from src.debate import RESUME_FUSION_PROMPTS, StageCallback, run_fusion
 from src.llm.unified import llm_complete_logged
 from src.logging_conf import log_event
 from src.resume.format import finalize_resume_output, line_count
-from src.schemas.resume import KeywordHit, ResumeAnalyzeResponse
+from src.resume.ats_score import compute_ats_match, keyword_coverage_pct, keyword_in_resume
+from src.schemas.resume import AtsMatchScore, KeywordHit, ResumeAnalyzeResponse
 
 
 @dataclass
@@ -61,17 +62,25 @@ async def analyze_resume_jd(resume_text: str, jd_text: str) -> ResumeAnalyzeResp
         }
     keywords = [str(x) for x in data.get("jd_keywords", [])]
     gaps = [str(x) for x in data.get("gaps", [])]
-    lowered = resume_text.lower()
     hits = [
-        KeywordHit(keyword=k, found_in_resume=k.lower() in lowered) for k in keywords
+        KeywordHit(keyword=k, found_in_resume=keyword_in_resume(k, resume_text))
+        for k in keywords
     ]
     excerpt = resume_text[:2000] + ("…" if len(resume_text) > 2000 else "")
+    ats = compute_ats_match(
+        resume_text=resume_text,
+        jd_text=jd_text,
+        keywords=keywords,
+        gaps=gaps,
+        keyword_hits=hits,
+    )
     return ResumeAnalyzeResponse(
         jd_keywords=keywords,
         keyword_hits=hits,
         gaps=gaps,
         resume_excerpt=excerpt,
         resume_text=resume_text,
+        ats_match=ats,
     )
 
 
@@ -149,11 +158,23 @@ async def refine_resume(
 
 
 def keyword_coverage_score(resume_text: str, keywords: list[str]) -> float:
-    if not keywords:
-        return 1.0
-    low = resume_text.lower()
-    hit = sum(1 for k in keywords if k.lower() in low)
-    return hit / len(keywords)
+    """Legacy 0–1 score; prefer compute_ats_match()."""
+    return keyword_coverage_pct(resume_text, keywords) / 100.0
+
+
+def compute_tailored_ats_match(
+    *,
+    resume_text: str,
+    jd_text: str,
+    keywords: list[str],
+    gaps: list[str],
+) -> AtsMatchScore:
+    return compute_ats_match(
+        resume_text=resume_text,
+        jd_text=jd_text,
+        keywords=keywords,
+        gaps=gaps,
+    )
 
 
 def log_stage(stage: str, **fields: Any) -> None:

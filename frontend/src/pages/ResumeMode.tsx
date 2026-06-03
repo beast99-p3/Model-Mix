@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import ReactDiffViewer from "react-diff-viewer-continued";
+import { AtsScoreCard, type AtsMatch } from "../components/AtsScoreCard";
 import { ResumeAnalyzeLoader } from "../components/ResumeAnalyzeLoader";
 import { ResumeGenerateLoader } from "../components/ResumeGenerateLoader";
 import { formatFastApiError } from "../lib/apiError";
@@ -12,13 +13,14 @@ type Analyze = {
   resume_excerpt: string;
   resume_text: string;
   source_upload_id?: string | null;
+  ats_match?: AtsMatch | null;
 };
 
 const GENERATE_STAGES = [
   "Four models drafting in parallel…",
   "Crossfire: refining each draft…",
   "Chair merging best version…",
-  "Checking keyword coverage…",
+  "Scoring ATS match for this role…",
   "Exporting Word document…",
 ];
 
@@ -37,7 +39,8 @@ export function ResumeMode() {
   const [artifactId, setArtifactId] = useState<string | null>(null);
   const [editableDraft, setEditableDraft] = useState("");
   const [editCommand, setEditCommand] = useState("");
-  const [score, setScore] = useState<number | null>(null);
+  const [baselineAts, setBaselineAts] = useState<AtsMatch | null>(null);
+  const [tailoredAts, setTailoredAts] = useState<AtsMatch | null>(null);
   const [showDiff, setShowDiff] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,7 +68,8 @@ export function ResumeMode() {
     setAnalyze(null);
     setArtifactId(null);
     setEditableDraft("");
-    setScore(null);
+    setBaselineAts(null);
+    setTailoredAts(null);
     setLog([]);
     setShowDiff(false);
 
@@ -81,6 +85,9 @@ export function ResumeMode() {
         return;
       }
       setAnalyze(data as Analyze);
+      if ((data as Analyze).ats_match) {
+        setBaselineAts((data as Analyze).ats_match ?? null);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -108,7 +115,8 @@ export function ResumeMode() {
     setLog([]);
     setArtifactId(null);
     setEditableDraft("");
-    setScore(null);
+    setBaselineAts(null);
+    setTailoredAts(null);
     setShowDiff(false);
 
     let completedId: string | null = null;
@@ -122,6 +130,7 @@ export function ResumeMode() {
         jd_text: jdText,
         preferences: prefs || null,
         keywords: analyze.jd_keywords,
+        gaps: analyze.gaps,
         source_upload_id: analyze.source_upload_id ?? null,
       }),
     });
@@ -141,10 +150,29 @@ export function ResumeMode() {
         if (typeof ev.message === "string") {
           pushLog(`${String(ev.stage)}: ${ev.message}`);
         }
-        if (ev.stage === "ats_check" && typeof ev.score === "number") {
-          setScore(ev.score);
+        if (ev.stage === "ats_check") {
+          const raw = ev.ats_match as AtsMatch | undefined;
+          if (raw && typeof raw.score_pct === "number") {
+            setTailoredAts(raw);
+          } else if (typeof ev.score === "number") {
+            setTailoredAts({
+              score_pct: Math.round(ev.score * 1000) / 10,
+              keyword_coverage_pct: Math.round(ev.score * 1000) / 10,
+              jd_alignment_pct: 0,
+              gap_readiness_pct: 100,
+              keywords_matched: 0,
+              keywords_total: analyze.jd_keywords.length,
+              gaps_count: 0,
+              label: "Match",
+              summary: "Keyword coverage from tailored resume.",
+            });
+          }
         }
         if (ev.stage === "complete" && typeof ev.artifact_id === "string") {
+          const completeAts = ev.ats_match as AtsMatch | undefined;
+          if (completeAts && typeof completeAts.score_pct === "number") {
+            setTailoredAts(completeAts);
+          }
           completedId = ev.artifact_id;
           if (typeof ev.draft_markdown === "string") {
             draftFromStream = ev.draft_markdown;
@@ -215,6 +243,8 @@ export function ResumeMode() {
         feedback: editCommand,
         jd_text: jdText,
         resume_text: editableDraft,
+        keywords: analyze?.jd_keywords ?? [],
+        gaps: analyze?.gaps ?? [],
       }),
     });
 
@@ -222,6 +252,7 @@ export function ResumeMode() {
       detail?: unknown;
       artifact_id?: string;
       draft_markdown?: string;
+      ats_match?: AtsMatch;
     };
 
     if (!res.ok) {
@@ -232,6 +263,9 @@ export function ResumeMode() {
 
     if (data?.artifact_id) {
       setArtifactId(data.artifact_id);
+      if (data.ats_match) {
+        setTailoredAts(data.ats_match);
+      }
       if (data.draft_markdown) {
         setEditableDraft(data.draft_markdown);
       } else {
@@ -312,6 +346,14 @@ export function ResumeMode() {
       {analyze && !analyzing && (
         <section className="space-y-4 rounded-xl border border-white/10 bg-surface p-5 shadow-xl">
           <h2 className="text-lg font-semibold text-white">Analysis</h2>
+
+          {baselineAts && (
+            <AtsScoreCard
+              match={baselineAts}
+              title="ATS match (original resume)"
+            />
+          )}
+
           <div className="grid gap-4 lg:grid-cols-2">
             <div>
               <h3 className="text-xs font-semibold uppercase text-slate-500">Keywords</h3>
@@ -362,8 +404,15 @@ export function ResumeMode() {
           {log.map((l, i) => (
             <div key={i}>{l}</div>
           ))}
-          {score !== null && <div className="mt-2 text-accent">Keyword coverage score: {score}</div>}
         </section>
+      )}
+
+      {tailoredAts && !generating && (
+        <AtsScoreCard
+          match={tailoredAts}
+          title="ATS match (tailored resume)"
+          baselinePct={baselineAts?.score_pct ?? null}
+        />
       )}
 
       {editableDraft && artifactId && (

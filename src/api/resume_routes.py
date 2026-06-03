@@ -21,8 +21,8 @@ from src.resume.extract import extract_text_from_bytes, read_upload_bytes
 from src.resume.pipeline import (
     PipelineContext,
     analyze_resume_jd,
+    compute_tailored_ats_match,
     draft_resume,
-    keyword_coverage_score,
     refine_resume,
 )
 from src.schemas.resume import (
@@ -87,13 +87,27 @@ async def resume_generate(body: ResumeGenerateRequest) -> StreamingResponse:
         except Exception as e:
             yield sse_data({"stage": "error", "message": str(e)})
             return
-        yield sse_data({"stage": "ats_check", "message": "Checking keyword coverage…"})
-        score = keyword_coverage_score(md, body.keywords)
-        yield sse_data({"stage": "ats_check", "score": round(score, 3)})
+        yield sse_data({"stage": "ats_check", "message": "Scoring ATS match for this role…"})
+        ats = compute_tailored_ats_match(
+            resume_text=md,
+            jd_text=ctx_jd,
+            keywords=body.keywords,
+            gaps=[],
+        )
+        yield sse_data({
+            "stage": "ats_check",
+            "score": round(ats.score_pct / 100.0, 3),
+            "ats_match": ats.model_dump(),
+        })
         aid = new_artifact_id()
         yield sse_data({"stage": "export", "message": "Writing Word and PDF documents…"})
         try:
-            write_resume_exports(aid, md, source_upload_id=body.source_upload_id)
+            write_resume_exports(
+                aid,
+                md,
+                source_text=ctx_resume,
+                source_upload_id=body.source_upload_id,
+            )
             write_meta(
                 ArtifactMeta(
                     artifact_id=aid,
@@ -107,7 +121,12 @@ async def resume_generate(body: ResumeGenerateRequest) -> StreamingResponse:
         except Exception as e:
             yield sse_data({"stage": "error", "message": str(e)})
             return
-        yield sse_data({"stage": "complete", "artifact_id": aid, "draft_markdown": md})
+        yield sse_data({
+            "stage": "complete",
+            "artifact_id": aid,
+            "draft_markdown": md,
+            "ats_match": ats.model_dump(),
+        })
 
     return StreamingResponse(
         event_gen(),
@@ -140,7 +159,12 @@ async def resume_refine(body: ResumeRefineRequest) -> ResumeRefineResponse:
         raise HTTPException(status_code=502, detail=str(e)) from e
 
     aid = new_artifact_id()
-    write_resume_exports(aid, md, source_upload_id=meta.source_upload_id)
+    write_resume_exports(
+        aid,
+        md,
+        source_text=meta.resume_text,
+        source_upload_id=meta.source_upload_id,
+    )
     write_meta(
         ArtifactMeta(
             artifact_id=aid,
@@ -151,7 +175,18 @@ async def resume_refine(body: ResumeRefineRequest) -> ResumeRefineResponse:
             source_upload_id=meta.source_upload_id,
         )
     )
-    return ResumeRefineResponse(artifact_id=aid, draft_markdown=md)
+    keywords = body.keywords or []
+    ats = (
+        compute_tailored_ats_match(
+            resume_text=md,
+            jd_text=jd,
+            keywords=keywords,
+            gaps=body.gaps,
+        )
+        if keywords
+        else None
+    )
+    return ResumeRefineResponse(artifact_id=aid, draft_markdown=md, ats_match=ats)
 
 
 @router.post("/save")
@@ -161,7 +196,12 @@ async def resume_save(body: ResumeSaveRequest) -> dict[str, str]:
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail="Artifact not found") from e
 
-    write_resume_exports(body.artifact_id, body.draft_markdown, source_upload_id=meta.source_upload_id)
+    write_resume_exports(
+        body.artifact_id,
+        body.draft_markdown,
+        source_text=meta.resume_text,
+        source_upload_id=meta.source_upload_id,
+    )
     write_meta(
         ArtifactMeta(
             artifact_id=body.artifact_id,
@@ -186,7 +226,12 @@ async def resume_download(
         raise HTTPException(status_code=404, detail="Artifact not found") from e
 
     docx_path, pdf_path, _ = artifact_paths(artifact_id)
-    write_resume_exports(artifact_id, meta.draft_markdown, source_upload_id=meta.source_upload_id)
+    write_resume_exports(
+        artifact_id,
+        meta.draft_markdown,
+        source_text=meta.resume_text,
+        source_upload_id=meta.source_upload_id,
+    )
 
     if format == "pdf":
         if not pdf_path.is_file():
